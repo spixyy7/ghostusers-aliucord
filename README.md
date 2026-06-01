@@ -123,10 +123,12 @@ that the `builds` directory is hidden from the tree view in Android Studio by de
 
 ## License
 
-Everything in this repo is released into the public domain.
-You may use it however you wish under no warranty. However, we recommend adding
-the [GPL v3](https://www.gnu.org/licenses/gpl-3.0.txt) license to your plugins!
-To do so, copy the license text into a file named "LICENSE" at the repository root.
+This template ([Aliucord/plugins-template](https://github.com/Aliucord/plugins-template)) is hereby
+released into the public domain. This license notice does not apply for repositories generated using
+this template, and you must refer to the applicable downstream license.
+
+We highly recommend adding the [GPLv3](https://www.gnu.org/licenses/gpl-3.0.txt) license to your plugins!
+To do so, copy the license text into a file named `LICENSE` at the repository root.
 
 THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY
 APPLICABLE LAW. EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT

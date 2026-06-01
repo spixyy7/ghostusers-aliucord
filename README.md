@@ -16,7 +16,7 @@ The official template for a [Aliucord](https://github.com/Aliucord) plugins mono
     - [Temurin](https://adoptium.net/temurin)
     - [Azul](https://www.azul.com/downloads/?package=jdk#zulu)
 
-## Getting Started With Plugins
+## Setting up your environment
 
 This template includes an example plugin written in Kotlin and Java, demonstrating how to implement
 a custom command and patches. While we provide backwards compatibility for Java plugins, writing
@@ -57,6 +57,29 @@ Now that you have located the deployment tasks, prepare your device (or emulator
 Visit the [plugin documentation](https://github.com/Aliucord/documentation/tree/main/plugin-dev)
 for more information on writing plugins, or take a look at the source code of existing plugins
 for examples and inspiration!
+
+## Setting up GitHub
+
+- Ensure that you have a remote branch named `builds`. This should have been automatically cloned
+  if you ticked the "Include all branches" when creating a new repository using this template.
+  If you did not do so, you can create an empty branch manually:
+  ```shell
+  $ git stash # To save any uncommitted changes, if applicable
+  $ git checkout --orphan builds
+  $ git rm -rf .
+  $ git commit --allow-empty -m "feat: init builds"
+  $ git push -u origin builds
+  ```
+- In order to accelerate builds, make sure that you properly enabled saving configuration cache
+  in CI builds. To do this, you will have to generate an encryption key and add an actions repository
+  secret. On a system with `openssl` installed, run:
+
+  ```shell
+  $ openssl rand -base64 16
+  ```
+
+  Take the output base64 string, and add a secret named `GRADLE_CACHE_ENCRYPTION_KEY` in
+  your repository's Settings > Secrets and Variables > Actions > Repository Secrets.
 
 ## Publishing your plugin
 

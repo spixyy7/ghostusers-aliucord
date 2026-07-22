@@ -12,6 +12,6 @@ aliucord {
         """.trimIndent(),
     )
 
-    // Lični plugin — ne objavljuje se u javne Aliucord repoe
-    deploy.set(false)
+    // Objavljuje se → Aliucord ume sam da se ažurira sa builds grane repo-a
+    deploy.set(true)
 }

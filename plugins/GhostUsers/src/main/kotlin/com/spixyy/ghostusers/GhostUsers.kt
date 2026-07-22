@@ -28,6 +28,8 @@ import com.discord.stores.StoreStream
 import com.discord.views.CheckedSetting
 import com.discord.widgets.user.usersheet.WidgetUserSheet
 import com.discord.widgets.user.usersheet.WidgetUserSheetViewModel
+import com.discord.widgets.voice.fullscreen.grid.VideoCallGridAdapter
+import java.lang.reflect.Modifier
 import com.lytefast.flexinput.R
 import java.lang.reflect.Field
 import com.discord.api.message.Message as ApiMessage
@@ -231,29 +233,57 @@ class GhostUsers : Plugin() {
        Isto kao dugme "Mute" na korisniku u pozivu — samo kod tebe. Ako se interni
        API razlikuje, samo se loguje upozorenje, ništa ne puca. */
 
+    /** StoreMediaSettings instanca (statički getter na StoreStream, potvrđeno u APK 126021). */
+    private fun mediaSettings(): Any? = try {
+        StoreStream::class.java.methods.firstOrNull {
+            it.name == "getMediaSettings" && Modifier.isStatic(it.modifiers) && it.parameterTypes.isEmpty()
+        }?.invoke(null)
+    } catch (_: Throwable) { null }
+
+    /** Da li je korisnik već lokalno mutovan — čita iz getMutedUsers(): Map<Long, Boolean>. */
+    private fun isUserLocallyMuted(ms: Any, userId: Long): Boolean = try {
+        val map = ms.javaClass.methods.firstOrNull { it.name == "getMutedUsers" && it.parameterTypes.isEmpty() }
+            ?.invoke(ms) as? Map<*, *>
+        map?.get(userId) == true
+    } catch (_: Throwable) { false }
+
+    /** Lokalni mute (samo kod tebe). Pravi API u Discord 126021: toggleUserMuted(long) —
+        toggluje, pa prvo proverimo stanje i pipnemo samo ako treba. */
     private fun setLocalMute(userId: Long, mute: Boolean) {
         try {
-            val getter = StoreStream::class.java.methods.firstOrNull { it.name == "getMediaSettings" }
-            val ms = getter?.invoke(null)
-            if (ms == null) { logger.warn("GhostUsers: StoreMediaSettings nedostupan — auto-mute preskočen"); return }
+            val ms = mediaSettings() ?: run { logger.warn("GhostUsers: getMediaSettings null — auto-mute preskočen"); return }
+            if (isUserLocallyMuted(ms, userId) == mute) return
+            val toggle = ms.javaClass.methods.firstOrNull { it.name == "toggleUserMuted" && it.parameterTypes.size == 1 }
+            if (toggle != null) toggle.invoke(ms, userId)
+            else logger.warn("GhostUsers: toggleUserMuted nije nađen na StoreMediaSettings")
+        } catch (e: Throwable) { logger.warn("GhostUsers: setLocalMute — ${e.message}") }
+    }
 
-            val isMuted = ms.javaClass.methods.firstOrNull {
-                (it.name == "isUserMuted" || it.name == "isMuted") && it.parameterTypes.size == 1
-            }?.invoke(ms, userId) as? Boolean
-            if (isMuted == mute) return
+    /* ---------------- sakrivanje učesnika poziva (grid auto-reposition) ----------------
+       VideoCallGridAdapter.setData(List) prima finalnu listu pločica. Filtriramo je pre
+       ulaska → grid renderuje manje pločica, a ResizingGridLayoutManager sam prerasporedi
+       (kao filter VoiceStateStore-a na PC-ju). User id vadimo:
+         item.getParticipantData() → ParticipantData → (polje tipa VoiceUser) → getUser() → id
+       Napomena: primenjuje se čim je korisnik sakriven, nezavisno od scope prekidača
+       (poziv je jedan kontekst; scope-per-kanal za poziv dolazi posle test-a na telefonu). */
 
-            val setter2 = ms.javaClass.methods.firstOrNull {
-                it.name == "setUserMuted" && it.parameterTypes.size == 2
-            }
-            if (setter2 != null) { setter2.invoke(ms, userId, mute); return }
-
-            val toggle = ms.javaClass.methods.firstOrNull {
-                (it.name == "toggleUserMute" || it.name == "toggleMute") && it.parameterTypes.size == 1
-            }
-            if (toggle != null) { toggle.invoke(ms, userId); return }
-
-            logger.warn("GhostUsers: nijedna mute metoda nije nađena na StoreMediaSettings")
-        } catch (e: Throwable) { logger.warn("GhostUsers: setLocalMute nije uspeo — ${e.message}") }
+    private fun callItemUserId(item: Any): Long? {
+        return try {
+            val pd = item.javaClass.methods.firstOrNull {
+                it.name == "getParticipantData" && it.parameterTypes.isEmpty()
+            }?.invoke(item) ?: return null
+            val voiceUser = pd.javaClass.declaredFields.firstOrNull { f ->
+                f.type.name.contains("StoreVoiceParticipants") && f.type.name.contains("VoiceUser")
+            }?.apply { isAccessible = true }?.get(pd)
+                ?: pd.javaClass.methods.firstOrNull {
+                    it.parameterTypes.isEmpty() && it.returnType.name.contains("VoiceUser")
+                }?.invoke(pd)
+                ?: return null
+            val user = voiceUser.javaClass.methods.firstOrNull {
+                it.name == "getUser" && it.parameterTypes.isEmpty()
+            }?.invoke(voiceUser) ?: return null
+            reflectLong(user, "id")
+        } catch (_: Throwable) { null }
     }
 
     /* ---------------- lifecycle ---------------- */
@@ -337,6 +367,19 @@ class GhostUsers : Plugin() {
                 },
             )
         } catch (e: Throwable) { logger.warn("GhostUsers: StoreCallsIncoming patch nije uspeo — ${e.message}") }
+
+        // 5b) Poziv: izbaci sakrivene iz grid-a pre nego što ga adapter iscrta →
+        //     preostali učesnici se sami prerasporede/centriraju
+        try {
+            patcher.before<VideoCallGridAdapter>("setData", List::class.java) { param ->
+                try {
+                    if (hidden.isEmpty()) return@before
+                    val list = param.args[0] as? List<*> ?: return@before
+                    val filtered = list.filter { it != null && !isHidden(callItemUserId(it)) }
+                    if (filtered.size != list.size) param.args[0] = filtered
+                } catch (e: Throwable) { logger.warn("GhostUsers: grid filter — ${e.message}") }
+            }
+        } catch (e: Throwable) { logger.warn("GhostUsers: VideoCallGridAdapter patch nije uspeo — ${e.message}") }
 
         // 6) Dugme na profilu korisnika (user sheet): Sakrij / Prikaži (Ghost)
         patcher.after<WidgetUserSheet>(

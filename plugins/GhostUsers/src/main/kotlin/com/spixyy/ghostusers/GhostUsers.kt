@@ -28,6 +28,9 @@ import com.discord.stores.StoreStream
 import com.discord.views.CheckedSetting
 import com.discord.widgets.user.usersheet.WidgetUserSheet
 import com.discord.widgets.user.usersheet.WidgetUserSheetViewModel
+import com.discord.stores.StoreVoiceParticipants
+import com.discord.widgets.voice.fullscreen.grid.PrivateCallBlurredGridView
+import com.discord.widgets.voice.fullscreen.grid.PrivateCallGridView
 import com.discord.widgets.voice.fullscreen.grid.VideoCallGridAdapter
 import java.lang.reflect.Modifier
 import com.lytefast.flexinput.R
@@ -380,6 +383,29 @@ class GhostUsers : Plugin() {
                 } catch (e: Throwable) { logger.warn("GhostUsers: grid filter — ${e.message}") }
             }
         } catch (e: Throwable) { logger.warn("GhostUsers: VideoCallGridAdapter patch nije uspeo — ${e.message}") }
+
+        // 5c) Ringing/preview ekran poziva (pre ulaska u call): krugovi sakrivenih
+        //     se uopšte ne crtaju — obe varijante (običan + blurovan grid) primaju
+        //     List<StoreVoiceParticipants.VoiceUser> kroz configure(), pa raspored
+        //     sam preračuna pozicije za preostale.
+        for (gridCls in listOf(PrivateCallGridView::class.java, PrivateCallBlurredGridView::class.java)) {
+            try {
+                patcher.patch(
+                    gridCls.getDeclaredMethod("configure", List::class.java),
+                    PreHook { param ->
+                        try {
+                            if (hidden.isEmpty()) return@PreHook
+                            val list = param.args[0] as? List<*> ?: return@PreHook
+                            val filtered = list.filter { vu ->
+                                val u = (vu as? StoreVoiceParticipants.VoiceUser)?.user
+                                u == null || !isHidden(u.id)
+                            }
+                            if (filtered.size != list.size) param.args[0] = filtered
+                        } catch (e: Throwable) { logger.warn("GhostUsers: preview grid — ${e.message}") }
+                    },
+                )
+            } catch (e: Throwable) { logger.warn("GhostUsers: ${gridCls.simpleName} patch nije uspeo — ${e.message}") }
+        }
 
         // 6) Dugme na profilu korisnika (user sheet): Sakrij / Prikaži (Ghost)
         patcher.after<WidgetUserSheet>(

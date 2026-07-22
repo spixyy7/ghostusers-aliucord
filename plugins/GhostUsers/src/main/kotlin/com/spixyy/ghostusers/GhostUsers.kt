@@ -81,6 +81,21 @@ class GhostUsers : Plugin() {
     private val fMentions by lazy { apiField("mentions") }
     private val fRefMsg by lazy { apiField("referencedMessage", "referenced_message") }
 
+    private fun reflectObj(obj: Any, vararg names: String): Any? {
+        for (n in names) {
+            try {
+                val f = obj.javaClass.getDeclaredField(n).apply { isAccessible = true }
+                f.get(obj)?.let { return it }
+            } catch (_: Throwable) {}
+            try {
+                val getter = "get" + n.replaceFirstChar { it.uppercase() }
+                val m = obj.javaClass.methods.firstOrNull { it.name == getter && it.parameterTypes.isEmpty() }
+                m?.invoke(obj)?.let { return it }
+            } catch (_: Throwable) {}
+        }
+        return null
+    }
+
     private fun reflectLong(obj: Any, vararg names: String): Long? {
         for (n in names) {
             try {
@@ -148,6 +163,30 @@ class GhostUsers : Plugin() {
             apiAuthorId(ref)?.let { if (isHiddenIn(it, chId)) return true }
         }
         val content = fContent?.get(msg) as? String
+        if (content != null && content.contains("<@"))
+            for (id in hidden.keys)
+                if (isHiddenIn(id, chId) && (content.contains("<@$id>") || content.contains("<@!$id>")))
+                    return true
+        return false
+    }
+
+    /** Isto kao shouldHideApi, ali generički (refleksijom) — radi i za MODEL poruke
+        (com.discord.models.message.Message) koje vraća handleMessagesLoaded chunk. */
+    private fun shouldHideAnyMessage(msg: Any, chId: Long?): Boolean {
+        reflectObj(msg, "author")?.let { a ->
+            reflectLong(a, "id")?.let { if (isHiddenIn(it, chId)) return true }
+        }
+        if (!settings.getBool("hideMentions", true)) return false
+        (reflectObj(msg, "mentions") as? List<*>)?.forEach { u ->
+            val uid = (u as? Number)?.toLong() ?: u?.let { reflectLong(it, "id") }
+            if (uid != null && isHiddenIn(uid, chId)) return true
+        }
+        reflectObj(msg, "referencedMessage")?.let { ref ->
+            reflectObj(ref, "author")?.let { a ->
+                reflectLong(a, "id")?.let { if (isHiddenIn(it, chId)) return true }
+            }
+        }
+        val content = reflectObj(msg, "content") as? String
         if (content != null && content.contains("<@"))
             for (id in hidden.keys)
                 if (isHiddenIn(id, chId) && (content.contains("<@$id>") || content.contains("<@!$id>")))
@@ -246,9 +285,10 @@ class GhostUsers : Plugin() {
                 val msgs = chunk.messages ?: return@after
                 val toDelete = ArrayList<Pair<Long, Long>>()
                 for (msg in msgs) {
-                    val chId = apiChannelId(msg) ?: reflectLong(chunk, "channelId") ?: continue
-                    val mId = apiMessageId(msg) ?: continue
-                    if (shouldHideApi(msg, chId)) toDelete.add(chId to mId)
+                    if (msg == null) continue
+                    val chId = reflectLong(msg, "channelId") ?: reflectLong(chunk, "channelId") ?: continue
+                    val mId = reflectLong(msg, "id") ?: continue
+                    if (shouldHideAnyMessage(msg, chId)) toDelete.add(chId to mId)
                 }
                 if (toDelete.isEmpty()) return@after
                 mainHandler.postDelayed({

@@ -29,6 +29,7 @@ import com.discord.stores.StoreMessagesLoader
 import com.discord.stores.StoreNotifications
 import com.discord.stores.StoreStream
 import com.discord.views.CheckedSetting
+import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemCallMessage
 import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
 import com.discord.widgets.chat.list.entries.ChatListEntry
 import com.discord.widgets.chat.list.entries.MessageEntry
@@ -599,6 +600,43 @@ class GhostUsers : Plugin() {
                 } catch (e: Throwable) { logger.warn("GhostUsers: DM member count — ${e.message}") }
             })
         } catch (e: Throwable) { logger.warn("GhostUsers: getMemberCount patch nije uspeo — ${e.message}") }
+
+        // 5h) Call redovi u chatu (Missed Call / Ongoing Call — poseban viewholder,
+        //     ne ide kroz ItemMessage): red poziva koji je SAKRIVENI započeo se skuplja,
+        //     a iz kružića učesnika se izbacuje pre crtanja — sledeći učesnik prirodno
+        //     popuni mesto (nema sivog placeholder-a), i "+X" brojač se sam smanji.
+        try {
+            val cls = WidgetChatListAdapterItemCallMessage::class.java
+            cls.declaredMethods.firstOrNull { it.name == "configure" && it.parameterTypes.size == 1 }?.let { m ->
+                m.isAccessible = true
+                patcher.patch(m, Hook { param ->
+                    try {
+                        val vh = param.thisObject as? RecyclerView.ViewHolder ?: return@Hook
+                        val message = (param.args[0] as? MessageEntry)?.message
+                        val hide = message != null && shouldHideAnyMessage(message, reflectLong(message, "channelId"))
+                        setRowCollapsed(vh.itemView, hide)
+                    } catch (e: Throwable) { logger.warn("GhostUsers: call row — ${e.message}") }
+                })
+            }
+            cls.declaredMethods.firstOrNull { it.name == "createCallParticipantUsers" }?.let { m ->
+                m.isAccessible = true
+                patcher.patch(m, PreHook { param ->
+                    try {
+                        if (hidden.isEmpty()) return@PreHook
+                        val map = param.args[0] as? Map<*, *> ?: return@PreHook
+                        val filtered = LinkedHashMap<Any?, Any?>()
+                        var changed = false
+                        for ((k, v) in map) {
+                            val id = (k as? Number)?.toLong()
+                                ?: (v as? StoreVoiceParticipants.VoiceUser)?.user?.id
+                            if (id != null && isHidden(id)) { changed = true; continue }
+                            filtered[k] = v
+                        }
+                        if (changed) param.args[0] = filtered
+                    } catch (e: Throwable) { logger.warn("GhostUsers: call avatari — ${e.message}") }
+                })
+            }
+        } catch (e: Throwable) { logger.warn("GhostUsers: ItemCallMessage patch nije uspeo — ${e.message}") }
 
         // 6) Dugme na profilu korisnika (user sheet): Sakrij / Prikaži (Ghost)
         patcher.after<WidgetUserSheet>(

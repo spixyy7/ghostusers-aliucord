@@ -1,9 +1,11 @@
-version = "1.6.1"
+version = "1.7.0"
 description = "Locally hide selected users: messages, mentions/replies, typing, notifications, incoming DM rings, call participants (grid auto-repositions) + auto local mute. Open a user's profile sheet for the Ghost button."
 
 aliucord {
     changelog.set(
         """
+        # 1.7.0
+        * Missed/Ongoing Call redovi u chatu: red poziva sakrivenog se ne prikazuje, a u kružićima učesnika sledeći korisnik popunjava mesto (bez sivog)
         # 1.6.1
         * DM lista "N Members": popravljeno brojanje sakrivenih (čita recipients objekte, ne id-eve)
         # 1.6.0

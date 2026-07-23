@@ -47,7 +47,20 @@ jobs:
           cd $GITHUB_WORKSPACE/src
           chmod +x ./gradlew
           ./gradlew make :generateUpdaterJson
-          
+
+          # jsDelivr kesira grane do 12h -> auto-update kasni. Prebaci update URL na
+          # raw.githubusercontent (osvezava se ~5min) u updater.json I u manifestu svakog zip-a.
+          OLD='https://cdn.jsdelivr.net/gh/spixyy7/ghostusers-aliucord@refs/heads/builds'
+          NEW='https://raw.githubusercontent.com/spixyy7/ghostusers-aliucord/builds'
+          sed -i "s#$OLD#$NEW#g" build/outputs/updater.json
+          for z in $GITHUB_WORKSPACE/src/plugins/*/build/outputs/*.zip; do
+            d=$(mktemp -d)
+            unzip -o -q "$z" manifest.json -d "$d"
+            sed -i "s#$OLD#$NEW#g" "$d/manifest.json"
+            (cd "$d" && zip -q "$z" manifest.json)
+            rm -rf "$d"
+          done
+
           rm -f $GITHUB_WORKSPACE/builds/*.zip
           cp $GITHUB_WORKSPACE/src/plugins/**/build/outputs/*.zip $GITHUB_WORKSPACE/builds/
           cp $GITHUB_WORKSPACE/src/build/outputs/updater.json $GITHUB_WORKSPACE/builds/

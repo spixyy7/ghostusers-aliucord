@@ -29,6 +29,7 @@ import com.discord.views.CheckedSetting
 import com.discord.widgets.user.usersheet.WidgetUserSheet
 import com.discord.widgets.user.usersheet.WidgetUserSheetViewModel
 import com.discord.stores.StoreVoiceParticipants
+import com.discord.widgets.channels.memberlist.PrivateChannelMemberListItemGeneratorKt
 import com.discord.widgets.voice.fullscreen.grid.PrivateCallBlurredGridView
 import com.discord.widgets.voice.fullscreen.grid.PrivateCallGridView
 import com.discord.widgets.voice.fullscreen.grid.VideoCallGridAdapter
@@ -406,6 +407,27 @@ class GhostUsers : Plugin() {
                 )
             } catch (e: Throwable) { logger.warn("GhostUsers: ${gridCls.simpleName} patch nije uspeo — ${e.message}") }
         }
+
+        // 5d) Lista članova grupe (side panel) + "MEMBERS — N": generator dobija
+        //     Map<Long, User> kao args[1]; izbacimo sakrivene iz mape pa se i
+        //     redovi i broj u headeru sami izračunaju bez njih.
+        try {
+            val genMethod = PrivateChannelMemberListItemGeneratorKt::class.java.declaredMethods
+                .firstOrNull { it.name == "generateGroupDmMemberListItems" }
+            if (genMethod == null) {
+                logger.warn("GhostUsers: generateGroupDmMemberListItems nije nađen — member lista se ne filtrira")
+            } else {
+                patcher.patch(genMethod, PreHook { param ->
+                    try {
+                        if (hidden.isEmpty()) return@PreHook
+                        if (!settings.getBool("scopeGroups", true)) return@PreHook
+                        val users = param.args[1] as? Map<*, *> ?: return@PreHook
+                        val filtered = users.filterKeys { k -> (k as? Long)?.let { !isHidden(it) } ?: true }
+                        if (filtered.size != users.size) param.args[1] = filtered
+                    } catch (e: Throwable) { logger.warn("GhostUsers: member lista — ${e.message}") }
+                })
+            }
+        } catch (e: Throwable) { logger.warn("GhostUsers: member list patch nije uspeo — ${e.message}") }
 
         // 6) Dugme na profilu korisnika (user sheet): Sakrij / Prikaži (Ghost)
         patcher.after<WidgetUserSheet>(

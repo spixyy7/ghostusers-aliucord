@@ -1,9 +1,11 @@
-version = "1.6.0"
+version = "1.6.1"
 description = "Locally hide selected users: messages, mentions/replies, typing, notifications, incoming DM rings, call participants (grid auto-repositions) + auto local mute. Open a user's profile sheet for the Ghost button."
 
 aliucord {
     changelog.set(
         """
+        # 1.6.1
+        * DM lista "N Members": popravljeno brojanje sakrivenih (čita recipients objekte, ne id-eve)
         # 1.6.0
         * Notifikacije (traka + in-app) od sakrivenih se ne prikazuju dok je app živ — važi za DM, grupe i server kanale (po scope-u)
         * "N Members" u DM listi umanjen za broj sakrivenih

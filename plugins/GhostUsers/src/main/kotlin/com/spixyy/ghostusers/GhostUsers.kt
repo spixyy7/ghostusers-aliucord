@@ -361,6 +361,20 @@ class GhostUsers : Plugin() {
         view.visibility = if (hide) View.GONE else View.VISIBLE
     }
 
+    // Koliko sakrivenih je u grupi. getMemberCount broji channel.getRecipients() (List<User>),
+    // pa i mi brojimo iz istog izvora. Radi bilo da recipients vraća User objekte ili Long id-eve;
+    // fallback na recipientIds ako recipients nije dostupan.
+    private fun countHiddenRecipients(channel: Channel): Int {
+        return try {
+            val w = ChannelWrapper(channel)
+            val list: List<*> = w.recipients ?: w.recipientIds ?: return 0
+            list.count { r ->
+                val id = (r as? Number)?.toLong() ?: r?.let { reflectLong(it, "id") }
+                id != null && isHidden(id)
+            }
+        } catch (_: Throwable) { 0 }
+    }
+
     private fun callItemUserId(item: Any): Long? {
         return try {
             val pd = item.javaClass.methods.firstOrNull {
@@ -575,8 +589,7 @@ class GhostUsers : Plugin() {
                 try {
                     if (hidden.isEmpty() || !settings.getBool("scopeGroups", true)) return@Hook
                     val channel = param.args[0] as? Channel ?: return@Hook
-                    val ids = ChannelWrapper(channel).recipientIds ?: return@Hook
-                    val hiddenCount = ids.count { isHidden(it) }
+                    val hiddenCount = countHiddenRecipients(channel)
                     if (hiddenCount <= 0) return@Hook
                     val s = param.result as? String ?: return@Hook
                     val match = Regex("\\d+").find(s, 0) ?: return@Hook // eksplicitni startIndex (stdlib 1.5.21)

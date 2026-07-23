@@ -6,8 +6,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.recyclerview.widget.RecyclerView
 import com.aliucord.Utils
 import com.aliucord.Utils.createCheckedSetting
 import com.aliucord.annotations.AliucordPlugin
@@ -27,6 +29,9 @@ import com.discord.stores.StoreMessagesLoader
 import com.discord.stores.StoreNotifications
 import com.discord.stores.StoreStream
 import com.discord.views.CheckedSetting
+import com.discord.widgets.chat.list.adapter.WidgetChatListAdapterItemMessage
+import com.discord.widgets.chat.list.entries.ChatListEntry
+import com.discord.widgets.chat.list.entries.MessageEntry
 import com.discord.widgets.user.usersheet.WidgetUserSheet
 import com.discord.widgets.user.usersheet.WidgetUserSheetViewModel
 import com.discord.stores.StoreVoiceParticipants
@@ -343,6 +348,16 @@ class GhostUsers : Plugin() {
         } catch (_: Throwable) { header as ChannelMembersListAdapter.Item }
     }
 
+    // Skupi red na 0 visine + GONE (sakriveno) ili vrati na WRAP_CONTENT (vidljivo).
+    // Vertikalna lista se skupi bez rupe; red se reciklira pa ga svaki put postavimo.
+    private fun setRowCollapsed(view: View, hide: Boolean) {
+        val lp = view.layoutParams
+            ?: ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.height = if (hide) 0 else ViewGroup.LayoutParams.WRAP_CONTENT
+        view.layoutParams = lp
+        view.visibility = if (hide) View.GONE else View.VISIBLE
+    }
+
     private fun callItemUserId(item: Any): Long? {
         return try {
             val pd = item.javaClass.methods.firstOrNull {
@@ -383,28 +398,25 @@ class GhostUsers : Plugin() {
             if (shouldHideApi(msg)) param.result = null
         }
 
-        // 3) Istorija: posle učitavanja chunk-a, lokalno "obriši" poruke sakrivenih
-        //    (isti mehanizam kao HideMessages plugin — ne šalje ništa Discordu)
-        patcher.after<StoreStream>("handleMessagesLoaded", StoreMessagesLoader.ChannelChunk::class.java) { param ->
-            try {
-                val chunk = param.args[0] as StoreMessagesLoader.ChannelChunk
-                val msgs = chunk.messages ?: return@after
-                val toDelete = ArrayList<Pair<Long, Long>>()
-                for (msg in msgs) {
-                    if (msg == null) continue
-                    val chId = reflectLong(msg, "channelId") ?: reflectLong(chunk, "channelId") ?: continue
-                    val mId = reflectLong(msg, "id") ?: continue
-                    if (shouldHideAnyMessage(msg, chId)) toDelete.add(chId to mId)
-                }
-                if (toDelete.isEmpty()) return@after
-                mainHandler.postDelayed({
-                    try {
-                        for ((chId, mId) in toDelete)
-                            StoreStream.getMessages().handleMessageDelete(ModelMessageDelete(chId, mId))
-                    } catch (e: Throwable) { logger.error("GhostUsers: sweep", e) }
-                }, 350)
-            } catch (e: Throwable) { logger.error("GhostUsers: handleMessagesLoaded", e) }
-        }
+        // 3) Prikaz istorije: umesto brisanja poruka iz store-a (što je pravilo treptaj
+        //    "bljesne pa nestane"), sakrivamo RED pri iscrtavanju — poruka sakrivenog se
+        //    nikad vizuelno ne pojavi, ni nova ni stara. onConfigure(int, ChatListEntry)
+        //    je stabilan hook svakog reda poruke (isti koji koristi zvanični primer).
+        try {
+            patcher.after<WidgetChatListAdapterItemMessage>(
+                "onConfigure",
+                Int::class.java,
+                ChatListEntry::class.java,
+            ) { param ->
+                try {
+                    val vh = param.thisObject as? RecyclerView.ViewHolder ?: return@after
+                    val view = vh.itemView
+                    val message = (param.args[1] as? MessageEntry)?.message
+                    val hide = message != null && shouldHideAnyMessage(message, reflectLong(message, "channelId"))
+                    setRowCollapsed(view, hide)
+                } catch (e: Throwable) { logger.warn("GhostUsers: onConfigure — ${e.message}") }
+            }
+        } catch (e: Throwable) { logger.warn("GhostUsers: chat row patch nije uspeo — ${e.message}") }
 
         // 4) "X is typing..." — reflektivno (ime handler metode se traži u runtime-u)
         try {

@@ -579,9 +579,10 @@ class GhostUsers : Plugin() {
                     val hiddenCount = ids.count { isHidden(it) }
                     if (hiddenCount <= 0) return@Hook
                     val s = param.result as? String ?: return@Hook
-                    val match = Regex("\\d+").find(s) ?: return@Hook
+                    val match = Regex("\\d+").find(s, 0) ?: return@Hook // eksplicitni startIndex (stdlib 1.5.21)
                     val n = match.value.toIntOrNull() ?: return@Hook
-                    param.result = s.replaceRange(match.range, (n - hiddenCount).coerceAtLeast(0).toString())
+                    val newN = if (n - hiddenCount < 0) 0 else n - hiddenCount
+                    param.result = s.substring(0, match.range.first) + newN + s.substring(match.range.last + 1)
                 } catch (e: Throwable) { logger.warn("GhostUsers: DM member count — ${e.message}") }
             })
         } catch (e: Throwable) { logger.warn("GhostUsers: getMemberCount patch nije uspeo — ${e.message}") }

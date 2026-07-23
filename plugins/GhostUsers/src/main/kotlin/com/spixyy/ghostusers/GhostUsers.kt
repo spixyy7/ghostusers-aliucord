@@ -14,6 +14,7 @@ import com.aliucord.annotations.AliucordPlugin
 import com.aliucord.api.CommandsAPI
 import com.aliucord.api.SettingsAPI
 import com.aliucord.entities.Plugin
+import com.aliucord.patcher.Hook
 import com.aliucord.patcher.PreHook
 import com.aliucord.patcher.after
 import com.aliucord.patcher.before
@@ -29,7 +30,12 @@ import com.discord.views.CheckedSetting
 import com.discord.widgets.user.usersheet.WidgetUserSheet
 import com.discord.widgets.user.usersheet.WidgetUserSheetViewModel
 import com.discord.stores.StoreVoiceParticipants
+import com.discord.widgets.channels.list.WidgetChannelListModel
+import com.discord.widgets.channels.list.items.ChannelListItemVoiceUser
+import com.discord.widgets.channels.memberlist.GuildMemberListItemGeneratorKt
 import com.discord.widgets.channels.memberlist.PrivateChannelMemberListItemGeneratorKt
+import com.discord.widgets.channels.memberlist.WidgetChannelMembersListViewModel
+import com.discord.widgets.channels.memberlist.adapter.ChannelMembersListAdapter
 import com.discord.widgets.voice.fullscreen.grid.PrivateCallBlurredGridView
 import com.discord.widgets.voice.fullscreen.grid.PrivateCallGridView
 import com.discord.widgets.voice.fullscreen.grid.VideoCallGridAdapter
@@ -271,6 +277,72 @@ class GhostUsers : Plugin() {
        Napomena: primenjuje se čim je korisnik sakriven, nezavisno od scope prekidača
        (poziv je jedan kontekst; scope-per-kanal za poziv dolazi posle test-a na telefonu). */
 
+    /* ---------------- guild (server) member lista + ONLINE/OFFLINE brojevi ----------------
+       generateGuildMemberListItems vraća WidgetChannelMembersListViewModel.MemberList — to je
+       INTERFEJS (get(i)/getSize()/getHeaderPositionForItem/getListId). Napravimo filtriran
+       snapshot: izbacimo Member redove sakrivenih i umanjimo memberCount njihovog headera.
+       Sve u try/catch — na bilo koju grešku vraćamo original (nikad ne slomimo listu). */
+
+    private fun memberItemUserId(item: Any): Long? =
+        (item as? ChannelMembersListAdapter.Item.Member)?.userId
+
+    private fun isHeaderItem(item: Any): Boolean =
+        item is ChannelMembersListAdapter.Item.Header || item is ChannelMembersListAdapter.Item.RoleHeader
+
+    private fun buildFilteredMemberList(orig: WidgetChannelMembersListViewModel.MemberList):
+        WidgetChannelMembersListViewModel.MemberList? {
+        return try {
+            val n = orig.size
+            if (n <= 0 || n > 3000) return null // bezbednosni limit za ogromne servere
+            val src = ArrayList<ChannelMembersListAdapter.Item>(n)
+            for (i in 0 until n) src.add(orig.get(i))
+
+            val out = ArrayList<ChannelMembersListAdapter.Item>(n)
+            var i = 0
+            while (i < src.size) {
+                val item = src[i]
+                if (isHeaderItem(item)) {
+                    var j = i + 1
+                    val group = ArrayList<ChannelMembersListAdapter.Item>()
+                    while (j < src.size && !isHeaderItem(src[j])) { group.add(src[j]); j++ }
+                    val kept = group.filter { !isHidden(memberItemUserId(it)) }
+                    val removed = group.size - kept.size
+                    out.add(if (removed > 0) adjustHeaderCount(item, removed) else item)
+                    out.addAll(kept)
+                    i = j
+                } else {
+                    if (!isHidden(memberItemUserId(item))) out.add(item)
+                    i++
+                }
+            }
+            if (out.size == src.size) return orig // ništa nije izbačeno
+
+            val headerPos = IntArray(out.size) { -1 }
+            var last = -1
+            for (k in out.indices) { if (isHeaderItem(out[k])) last = k; headerPos[k] = last }
+            val listId = orig.listId
+
+            object : WidgetChannelMembersListViewModel.MemberList {
+                override fun get(index: Int): ChannelMembersListAdapter.Item = out[index]
+                override fun getSize(): Int = out.size
+                override fun getListId(): String = listId
+                override fun getHeaderPositionForItem(index: Int): Int? {
+                    val h = if (index in out.indices) headerPos[index] else -1
+                    return if (h < 0) null else h
+                }
+            }
+        } catch (e: Throwable) { logger.warn("GhostUsers: guild member lista — ${e.message}"); null }
+    }
+
+    /** Umanji broj u status headeru (ONLINE — N / OFFLINE — N) za broj izbačenih. */
+    private fun adjustHeaderCount(header: Any, removed: Int): ChannelMembersListAdapter.Item {
+        return try {
+            val h = header as ChannelMembersListAdapter.Item.Header
+            val newCount = (h.memberCount - removed).coerceAtLeast(0)
+            h.copy(h.component1(), h.component2(), newCount)
+        } catch (_: Throwable) { header as ChannelMembersListAdapter.Item }
+    }
+
     private fun callItemUserId(item: Any): Long? {
         return try {
             val pd = item.javaClass.methods.firstOrNull {
@@ -428,6 +500,34 @@ class GhostUsers : Plugin() {
                 })
             }
         } catch (e: Throwable) { logger.warn("GhostUsers: member list patch nije uspeo — ${e.message}") }
+
+        // 5e) Voice korisnici u listi kanala servera: sakriveni se ne prikazuju ispod
+        //     voice kanala. WidgetChannelListModel.getItems() vraća sve stavke liste;
+        //     izbacimo ChannelListItemVoiceUser sakrivenih pa se lista sama složi.
+        try {
+            patcher.after<WidgetChannelListModel>("getItems") { param ->
+                try {
+                    if (hidden.isEmpty() || !settings.getBool("scopeServers", false)) return@after
+                    val list = param.result as? List<*> ?: return@after
+                    val filtered = list.filter { it !is ChannelListItemVoiceUser || !isHidden(it.user?.id) }
+                    if (filtered.size != list.size) param.result = filtered
+                } catch (e: Throwable) { logger.warn("GhostUsers: voice u listi kanala — ${e.message}") }
+            }
+        } catch (e: Throwable) { logger.warn("GhostUsers: WidgetChannelListModel patch nije uspeo — ${e.message}") }
+
+        // 5f) Lista članova servera + ONLINE/OFFLINE brojevi: filtriran wrapper
+        try {
+            val gm = GuildMemberListItemGeneratorKt::class.java.declaredMethods
+                .firstOrNull { it.name == "generateGuildMemberListItems" }
+            if (gm == null) logger.warn("GhostUsers: generateGuildMemberListItems nije nađen — server lista se ne filtrira")
+            else patcher.patch(gm, Hook { param ->
+                try {
+                    if (hidden.isEmpty() || !settings.getBool("scopeServers", false)) return@Hook
+                    val orig = param.result as? WidgetChannelMembersListViewModel.MemberList ?: return@Hook
+                    buildFilteredMemberList(orig)?.let { param.result = it }
+                } catch (e: Throwable) { logger.warn("GhostUsers: server member lista — ${e.message}") }
+            })
+        } catch (e: Throwable) { logger.warn("GhostUsers: guild member list patch nije uspeo — ${e.message}") }
 
         // 6) Dugme na profilu korisnika (user sheet): Sakrij / Prikaži (Ghost)
         patcher.after<WidgetUserSheet>(

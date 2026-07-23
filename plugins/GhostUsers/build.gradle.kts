@@ -1,9 +1,11 @@
-version = "1.3.0"
+version = "1.4.0"
 description = "Locally hide selected users: messages, mentions/replies, typing, notifications, incoming DM rings, call participants (grid auto-repositions) + auto local mute. Open a user's profile sheet for the Ghost button."
 
 aliucord {
     changelog.set(
         """
+        # 1.4.0
+        * Serveri: sakriveni izbačeni iz member liste (+ ONLINE/OFFLINE brojevi umanjeni) i ispod voice kanala. Uključi "Serveri" scope u podešavanjima.
         # 1.3.0
         * Sakriveni izbačeni i iz liste članova grupe; "MEMBERS — N" pokazuje broj bez njih
         # 1.2.0

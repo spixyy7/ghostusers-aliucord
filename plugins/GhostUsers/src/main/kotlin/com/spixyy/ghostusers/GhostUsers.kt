@@ -34,8 +34,11 @@ import com.discord.widgets.chat.list.entries.ChatListEntry
 import com.discord.widgets.chat.list.entries.MessageEntry
 import com.discord.widgets.user.usersheet.WidgetUserSheet
 import com.discord.widgets.user.usersheet.WidgetUserSheetViewModel
+import com.discord.api.channel.Channel
 import com.discord.stores.StoreVoiceParticipants
+import com.discord.utilities.fcm.NotificationRenderer
 import com.discord.widgets.channels.list.WidgetChannelListModel
+import com.discord.widgets.channels.list.WidgetChannelsListAdapter
 import com.discord.widgets.channels.list.items.ChannelListItemVoiceUser
 import com.discord.widgets.channels.memberlist.GuildMemberListItemGeneratorKt
 import com.discord.widgets.channels.memberlist.PrivateChannelMemberListItemGeneratorKt
@@ -398,6 +401,27 @@ class GhostUsers : Plugin() {
             if (shouldHideApi(msg)) param.result = null
         }
 
+        // 2b) Notifikacije (sistemska traka + in-app heads-up) od sakrivenih se NE prikazuju
+        //     dok je aplikacija živa (u prvom planu ili u pozadini). display()/displayInApp()
+        //     primaju NotificationData(getUserId/getChannelId). NAPOMENA: kada je app POTPUNO
+        //     ugašen, notifikaciju gura Google (FCM) mimo aplikacije — to plugin ne može da vidi.
+        try {
+            for (fn in listOf("display", "displayInApp")) {
+                val m = NotificationRenderer::class.java.declaredMethods.firstOrNull {
+                    it.name == fn && it.parameterTypes.any { p -> p.name.endsWith("NotificationData") }
+                } ?: continue
+                patcher.patch(m, PreHook { param ->
+                    try {
+                        val data = param.args.firstOrNull { it != null && it.javaClass.name.endsWith("NotificationData") }
+                            ?: return@PreHook
+                        val uid = reflectLong(data, "userId")
+                        val chId = reflectLong(data, "channelId")
+                        if (uid != null && isHiddenIn(uid, chId)) param.result = null
+                    } catch (e: Throwable) { logger.warn("GhostUsers: notif filter — ${e.message}") }
+                })
+            }
+        } catch (e: Throwable) { logger.warn("GhostUsers: NotificationRenderer patch nije uspeo — ${e.message}") }
+
         // 3) Prikaz istorije: umesto brisanja poruka iz store-a (što je pravilo treptaj
         //    "bljesne pa nestane"), sakrivamo RED pri iscrtavanju — poruka sakrivenog se
         //    nikad vizuelno ne pojavi, ni nova ni stara. onConfigure(int, ChatListEntry)
@@ -540,6 +564,27 @@ class GhostUsers : Plugin() {
                 } catch (e: Throwable) { logger.warn("GhostUsers: server member lista — ${e.message}") }
             })
         } catch (e: Throwable) { logger.warn("GhostUsers: guild member list patch nije uspeo — ${e.message}") }
+
+        // 5g) DM lista (Direct Messages): "N Members" ispod grupe → umanji za broj sakrivenih.
+        //     getMemberCount(Channel, Context) vraća gotov string ("7 Members"); prepišemo broj.
+        try {
+            val m = WidgetChannelsListAdapter.ItemChannelPrivate::class.java
+                .getDeclaredMethod("getMemberCount", Channel::class.java, Context::class.java)
+                .apply { isAccessible = true }
+            patcher.patch(m, Hook { param ->
+                try {
+                    if (hidden.isEmpty() || !settings.getBool("scopeGroups", true)) return@Hook
+                    val channel = param.args[0] as? Channel ?: return@Hook
+                    val ids = ChannelWrapper(channel).recipientIds ?: return@Hook
+                    val hiddenCount = ids.count { isHidden(it) }
+                    if (hiddenCount <= 0) return@Hook
+                    val s = param.result as? String ?: return@Hook
+                    val match = Regex("\\d+").find(s) ?: return@Hook
+                    val n = match.value.toIntOrNull() ?: return@Hook
+                    param.result = s.replaceRange(match.range, (n - hiddenCount).coerceAtLeast(0).toString())
+                } catch (e: Throwable) { logger.warn("GhostUsers: DM member count — ${e.message}") }
+            })
+        } catch (e: Throwable) { logger.warn("GhostUsers: getMemberCount patch nije uspeo — ${e.message}") }
 
         // 6) Dugme na profilu korisnika (user sheet): Sakrij / Prikaži (Ghost)
         patcher.after<WidgetUserSheet>(
